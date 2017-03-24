@@ -40,13 +40,14 @@ I would also suggest to have all 3 proxy layers on the same machine.
 NGINX -> Cacher -> Varnish -> InfluxDB
 ```
 
+See **examples** directory for VCL example file.
+
 
 ## Configuration
 
 
 ## TODO
 
-- Notify Backend if it should cache the request (Force-Control-Cache or similar)
 - Fix merge mechanisme (Using influxdb types)
 - Request parallelization
 - Better logging system
