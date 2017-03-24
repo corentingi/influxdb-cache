@@ -17,12 +17,14 @@ var (
 	version         = "alpha"
 	DefaultBackend  = "http://localhost:8086/query"
 	DefaultBindAddr = ":8085"
+	DefaultMaxAge   = "86400"
 	c cli
 )
 
 type cli struct {
 	Backend  string
 	BindAddr string
+	MaxAge string
 }
 
 // Needs to be changed to influxql.Result
@@ -43,6 +45,7 @@ func main() {
 	fs := flag.NewFlagSet("InfluxDB cache, version " + version, flag.ExitOnError)
 	fs.StringVar(&c.BindAddr, "bind", DefaultBindAddr, "Address where HTTP server listens to.")
 	fs.StringVar(&c.Backend, "backend", DefaultBackend, "Backend where requests are being sent.")
+	fs.StringVar(&c.MaxAge, "max-age", DefaultMaxAge, "TTL advertised to the cache server for cacheable queries.")
 	fs.Parse(os.Args[1:])
 
 	// Start server
@@ -79,7 +82,7 @@ func query(w http.ResponseWriter, r *http.Request) {
 		var err error
 		if len(q) < 2 {
 			v.Set("q", q[0])
-			results, err = GetResponse(c.Backend, v)
+			results, err = GetResponse(c.Backend, v, false)
 			if err != nil {
 				// Error 500 ?
 				return
@@ -87,7 +90,7 @@ func query(w http.ResponseWriter, r *http.Request) {
 		} else {
 			for _, s := range(q) {
 				v.Set("q", s)
-				partial, err := GetResponse(c.Backend, v)
+				partial, err := GetResponse(c.Backend, v, true)
 				if err != nil {
 					// Error 500 ?
 					return
@@ -106,9 +109,21 @@ func query(w http.ResponseWriter, r *http.Request) {
 }
 
 // Process the query and return the response
-func GetResponse(u string, p url.Values) (InfluxResponse, error) {
+func GetResponse(u string, p url.Values, cacheable bool) (InfluxResponse, error) {
 	u = u + "?" + p.Encode()
-	resp, err := http.Get(u)
+
+	client := &http.Client{}
+	req, err := http.NewRequest("GET", u, nil)
+	if err != nil {
+		return InfluxResponse{}, err
+	}
+
+	if cacheable {
+		req.Header.Add("X-Force-Cache-Control", "max-age="+c.MaxAge)
+	} else {
+		req.Header.Add("X-Force-Cache-Control", `no-cache`)
+	}
+	resp, err := client.Do(req)
 	defer resp.Body.Close()
 
 	if err != nil {
