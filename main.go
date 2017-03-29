@@ -1,16 +1,17 @@
 package main
 
 import (
+	"encoding/json"
+	"flag"
 	"fmt"
+	"github.com/influxdata/influxdb/influxql"
+	"github.com/influxdata/influxdb/services/httpd"
 	"io/ioutil"
 	"net/http"
 	"net/url"
 	"os"
-	"encoding/json"
-	"github.com/influxdata/influxdb/influxql"
-	"time"
 	"strings"
-	"flag"
+	"time"
 )
 
 var (
@@ -25,18 +26,6 @@ type cli struct {
 	Backend  string
 	BindAddr string
 	MaxAge string
-}
-
-// Needs to be changed to influxql.Result
-type InfluxResponse struct {
-	Results []struct {
-		StatementId json.RawMessage `json:"statement_id"`
-		Series []struct {
-			Name string `json:"name"`
-			Columns []string `json:"columns"`
-			Values []json.RawMessage `json:"values"`
-		} `json:"series"`
-	} `json:"results"`
 }
 
 
@@ -76,18 +65,20 @@ func query(w http.ResponseWriter, r *http.Request) {
 	v := url.Values{}
 	ForwardUrlQueryParameters(&v, r.URL)
 
-	var finalResp InfluxResponse
+	// This needs to be parralellized
+	var finalResp httpd.Response
 	for _, q := range(queries) {
-		var results InfluxResponse
+		var response httpd.Response
 		var err error
 		if len(q) < 2 {
 			v.Set("q", q[0])
-			results, err = GetResponse(c.Backend, v, false)
+			response, err = GetResponse(c.Backend, v, false)
 			if err != nil {
 				// Error 500 ?
 				return
 			}
 		} else {
+			// This needs to be parralellized
 			for _, s := range(q) {
 				v.Set("q", s)
 				partial, err := GetResponse(c.Backend, v, true)
@@ -95,11 +86,17 @@ func query(w http.ResponseWriter, r *http.Request) {
 					// Error 500 ?
 					return
 				}
-				Merge(&results, partial)
+				if len(response.Results) == 0 {
+					response.Results = partial.Results
+				} else {
+					Merge(response.Results[0], *partial.Results[0])
+				}
 			}
+
 		}
-		finalResp.Results = append(finalResp.Results, results.Results...)
+		finalResp.Results = append(finalResp.Results, response.Results...)
 	}
+	// finalBytes, _ := finalResp.MarshalJSON()
 	finalBytes, _ := json.Marshal(finalResp)
 
 	// Send request
@@ -109,13 +106,13 @@ func query(w http.ResponseWriter, r *http.Request) {
 }
 
 // Process the query and return the response
-func GetResponse(u string, p url.Values, cacheable bool) (InfluxResponse, error) {
+func GetResponse(u string, p url.Values, cacheable bool) (httpd.Response, error) {
 	u = u + "?" + p.Encode()
 
-	client := &http.Client{}
+	httpclient := &http.Client{}
 	req, err := http.NewRequest("GET", u, nil)
 	if err != nil {
-		return InfluxResponse{}, err
+		return httpd.Response{}, err
 	}
 
 	if cacheable {
@@ -123,15 +120,16 @@ func GetResponse(u string, p url.Values, cacheable bool) (InfluxResponse, error)
 	} else {
 		req.Header.Add("X-Force-Cache-Control", `no-cache`)
 	}
-	resp, err := client.Do(req)
+	resp, err := httpclient.Do(req)
 	defer resp.Body.Close()
 
 	if err != nil {
-		return InfluxResponse{}, err
+		return httpd.Response{}, err
 	}
 
-	var respJSON InfluxResponse
+	var respJSON httpd.Response
 	bodyBytes, _ := ioutil.ReadAll(resp.Body)
+	// respJSON.UnmarshalJSON(bodyBytes)
 	json.Unmarshal(bodyBytes, &respJSON)
 
 	return respJSON, nil
@@ -344,33 +342,14 @@ func LCM(a, b time.Duration) time.Duration {
 // Merge part
 //
 
-// influxql.TagSet
-// influxql.Message
-// influxql.Result
-func Merge(dst *InfluxResponse, src InfluxResponse) error {
-	// fmt.Println("Merging...")
-	for i, srcResult := range(src.Results) {
-		// Each result
-		if i + 1 > len(dst.Results) {
-			// Append results if there is not enough
-			// fmt.Println("Append new result")
-			dst.Results = append(dst.Results, srcResult)
-			continue
-		}
-		for _, srcSeries := range(srcResult.Series) {
-			// Each series
-			for k, dstSeries := range(dst.Results[i].Series) {
-				if dstSeries.Name == srcSeries.Name {
-					// Append values
-					// fmt.Println("Append", len(srcSeries.Values), "values to", dstSeries.Name)
-					dst.Results[i].Series[k].Values = append(dst.Results[i].Series[k].Values, srcSeries.Values...)
-					break
-				}
-				// Otherwise append the Series to the destination
-				// fmt.Println("Append new series", dstSeries.Name)
-				dst.Results[i].Series = append(dst.Results[i].Series, srcSeries)
-			}
-		}
+// Merge copies the values from all series in src to dst
+func Merge(dst *influxql.Result, src influxql.Result) error {
+	if len(dst.Series) == 0 {
+		dst.Series = src.Series
+		return nil
+	}
+	for i := 0; i < len(src.Series); i++ {
+		dst.Series[i].Values = append(dst.Series[i].Values, src.Series[i].Values...)
 	}
 	return nil
 }

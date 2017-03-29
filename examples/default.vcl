@@ -12,18 +12,16 @@ vcl 4.0;
 
 # Default backend definition. Set this to point to your content server.
 backend default {
-    .host = "195.157.5.51";
+    .host = "127.0.0.1";
     .port = "8086";
 }
 
-sub vcl_recv {
-    # Only caches the queries explicitely described as cacheable
-    if (req.http.X-Force-Cache-Control && req.http.X-Force-Cache-Control !~ "no-cache") {
-        return (hash);
-    }
-    return (pipe);
-}
-
 sub vcl_backend_response {
-    set beresp.ttl = 24h;
+    # Override TTL if the request is cacheable and Cache-Control was not set
+    if (beresp.http.Cache-Control ~ "") {
+        set beresp.ttl = 0s;
+        if (bereq.http.X-Force-Cache-Control ~ "max-age") {
+            set beresp.ttl = 1w;
+        }
+    }
 }

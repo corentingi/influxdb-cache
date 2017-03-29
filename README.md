@@ -48,7 +48,9 @@ See **examples** directory for VCL example file.
 
 ## TODO
 
-- Fix merge mechanisme (Using influxdb types)
+- If none of statements in the query is cacheable don't Unmarshall anything
+- Handle no result influxdb errors
+- Check Time zone issue (if it really is there)
 - Request parallelization
 - Better logging system
 - Handle errors and status codes
